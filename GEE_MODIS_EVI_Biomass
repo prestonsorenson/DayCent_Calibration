@@ -1,0 +1,360 @@
+// =============================================================================
+// GEE Script: Saskatchewan Pasture Site Selection — EVI-Derived Biomass v3
+// =============================================================================
+// Selects stable grassland/pasture sites for DayCent perennial calibration.
+//
+// SITE SELECTION CRITERIA:
+//   1. AAFC stable grassland/pasture — codes 110/122 in >= 70% of ACI years
+//   2. Minimum productivity — mean growing-season EVI > EVI_MIN
+//   3. Within-season disturbance filter — removes sites where EVI shows a
+//      sustained mid-season decline in >= DISTURB_YR_THRESH years.
+//
+// DISTURBANCE DETECTION (v3 — robust to single-composite noise):
+//   A year is flagged as disturbed when the MEDIAN of composites in the
+//   second half of the growing season (DOY 177-225) falls more than
+//   DECLINE_THRESH below the PEAK composite in the first half (DOY 121-176).
+//   Using medians rather than min/max removes sensitivity to single noisy
+//   composites while still detecting genuine mid-season biomass removal.
+//
+//   DOY 121-176: early growing season (~4 composites) — ramp-up period
+//   DOY 177-225: mid growing season (~3 composites) — post-peak check window
+//   DOY 226-240: excluded — natural senescence, not disturbance
+//
+// Interannual variability from climate is NOT penalised.
+//
+// EVI → biomass: log-linear calibration (SRI field data, n=62, r²=0.587)
+//   abg_c = 13.58 × exp(5.2918 × EVI_mean)
+//
+// =============================================================================
+
+// =============================================================================
+// 1. CONFIGURATION
+// =============================================================================
+
+var END_YEAR      = 2026;
+var N_SITES       = 125;
+var EXPORT_FOLDER = 'modis_sk_biomass';
+
+// Land cover stability
+var STABLE_MASK_MIN = 0.70;
+
+// Minimum mean growing-season EVI (productivity floor)
+var EVI_MIN = 0.10;
+
+// Within-season disturbance detection
+// Flag a year as disturbed if the median EVI in DOY 177-225 falls more than
+// DECLINE_THRESH below the peak EVI in DOY 121-176.
+// e.g. 0.30 = second-half median must be > 70% of first-half peak
+var DECLINE_THRESH = 0.30;
+
+// Exclude a site if disturbed in > DISTURB_YR_THRESH fraction of years
+var DISTURB_YR_THRESH = 0.25;
+
+// Spatial thinning and stratification
+var GRID_M      = 10000;
+var N_STRATA    = 25;
+var PER_STRATUM = 5;
+
+// Log-linear EVI → biomass coefficients
+var EXP_COEF = 13.58;
+var EVI_COEF =  5.2918;
+
+var SK         = ee.Geometry.Rectangle([-110, 49, -102, 54]);
+var SK_LON_MIN = -110; var SK_LON_MAX = -102;
+var SK_LAT_MIN =   49; var SK_LAT_MAX =   54;
+var LON_STEP   = (SK_LON_MAX - SK_LON_MIN) / 5;
+var LAT_STEP   = (SK_LAT_MAX - SK_LAT_MIN) / 5;
+
+// =============================================================================
+// 2. AAFC STABLE GRASSLAND MASK
+// =============================================================================
+
+var aafc = ee.ImageCollection('AAFC/ACI')
+  .filterBounds(SK)
+  .filterDate('2009-01-01', '2024-01-01')
+  .select('landcover');
+
+var grass_annual = aafc.map(function(img) {
+  return img.eq(110).or(img.eq(122)).rename('gp').toFloat();
+});
+
+var pct_gp      = grass_annual.sum().divide(grass_annual.count());
+var stable_mask = pct_gp.gte(STABLE_MASK_MIN);
+
+// Per-year mask dictionary for export
+var aafc_years   = ee.List.sequence(2009, 2023);
+var aafc_by_year = ee.Dictionary(
+  aafc_years.iterate(function(yr, dict) {
+    yr = ee.Number(yr);
+    var img  = aafc.filter(ee.Filter.calendarRange(yr, yr, 'year')).first();
+    img = ee.Image(ee.Algorithms.If(img, img, aafc.first()));
+    var mask = img.eq(110).or(img.eq(122)).rename('gp_mask');
+    return ee.Dictionary(dict).set(yr.format('%d'), mask);
+  }, ee.Dictionary({}))
+);
+
+var get_aafc_mask = function(yr) {
+  var yr_clamped = ee.Number(yr).max(2009).min(2023);
+  return ee.Image(aafc_by_year.get(yr_clamped.format('%d')));
+};
+
+Map.addLayer(stable_mask.selfMask().clip(SK),
+  {palette: ['00AA44']}, 'Stable grass/pasture mask');
+
+// =============================================================================
+// 3. MODIS EVI — MOD13A1 WITH BIOMASS CONVERSION
+// =============================================================================
+
+var scale_and_convert = function(img) {
+  var qa    = img.select('SummaryQA');
+  var valid = qa.lte(1);
+  var evi   = img.select('EVI')
+                 .updateMask(valid)
+                 .multiply(0.0001)
+                 .rename('evi');
+  var abg_c = evi.multiply(EVI_COEF).exp().multiply(EXP_COEF).rename('abg_c');
+  return evi.addBands(abg_c)
+            .copyProperties(img, ['system:time_start']);
+};
+
+var modis_v006 = ee.ImageCollection('MODIS/006/MOD13A1')
+  .filterBounds(SK)
+  .filterDate('2000-01-01', '2022-01-01')
+  .map(scale_and_convert);
+
+var modis_v061 = ee.ImageCollection('MODIS/061/MOD13A1')
+  .filterBounds(SK)
+  .filterDate('2022-01-01', (END_YEAR + 1) + '-01-01')
+  .map(scale_and_convert);
+
+var modis_full = modis_v006.merge(modis_v061);
+
+print('MOD13A1 combined count:', modis_full.size());
+
+// =============================================================================
+// 4. WITHIN-SEASON DISTURBANCE DETECTION
+// =============================================================================
+// Split growing season into two halves:
+//   Early (DOY 121-176): ramp-up; take the MAX as the seasonal peak
+//   Mid   (DOY 177-225): plateau/decline window; take the MEDIAN
+//
+// A disturbance is flagged when:
+//   (early_max - mid_median) / early_max > DECLINE_THRESH
+//
+// Using MAX for early and MEDIAN for mid means:
+//   - A single noisy high composite in early season doesn't inflate peak
+//     unrealistically — actually we want the peak, so MAX is appropriate
+//   - A single noisy low composite in mid season doesn't falsely flag
+//     disturbance — MEDIAN smooths over it
+//
+// Site excluded if disturbance fraction across years > DISTURB_YR_THRESH
+
+var evi_early = modis_full
+  .filter(ee.Filter.calendarRange(121, 176, 'day_of_year'))
+  .select('evi');
+
+var evi_mid = modis_full
+  .filter(ee.Filter.calendarRange(177, 225, 'day_of_year'))
+  .select('evi');
+
+var years_list = ee.List.sequence(2000, END_YEAR);
+
+var annual_disturbed = ee.ImageCollection(
+  years_list.map(function(yr) {
+    yr = ee.Number(yr);
+
+    var early_imgs = evi_early.filter(ee.Filter.calendarRange(yr, yr, 'year'));
+    var mid_imgs   = evi_mid.filter(ee.Filter.calendarRange(yr, yr, 'year'));
+
+    var has_both = early_imgs.size().gt(0).and(mid_imgs.size().gt(0));
+
+    // Peak of early season; median of mid season
+    var early_max   = early_imgs.max().rename('early_max');
+    var mid_median  = mid_imgs.reduce(ee.Reducer.median()).rename('mid_median');
+
+    // Relative drop: (peak - mid_median) / peak
+    var rel_drop = early_max
+      .subtract(mid_median)
+      .divide(early_max.max(0.01))
+      .rename('rel_drop');
+
+    // Binary disturbance flag
+    var flag  = rel_drop.gt(DECLINE_THRESH).rename('disturbed').toFloat();
+    var empty = ee.Image(0).rename('disturbed');
+
+    return ee.Image(ee.Algorithms.If(has_both, flag, empty)).set('year', yr);
+  })
+);
+
+// Fraction of years flagged as disturbed
+var disturb_sum  = annual_disturbed.sum();
+var n_years      = annual_disturbed.count();
+var disturb_frac = disturb_sum.divide(n_years).rename('disturb_frac');
+
+Map.addLayer(disturb_frac.clip(SK),
+  {min: 0, max: 0.5, palette: ['green', 'yellow', 'red']},
+  'Disturbance fraction (mid-season EVI drop frequency)');
+
+// =============================================================================
+// 5. MEAN GROWING SEASON EVI
+// =============================================================================
+
+var evi_gs_full = modis_full
+  .filter(ee.Filter.calendarRange(121, 240, 'day_of_year'))
+  .select('evi');
+
+var evi_mean = evi_gs_full.mean().rename('evi_mean');
+
+Map.addLayer(evi_mean.clip(SK),
+  {min: 0.05, max: 0.6, palette: ['white', 'lightgreen', 'darkgreen']},
+  'Mean growing-season EVI');
+
+// =============================================================================
+// 6. ELIGIBLE PIXEL MASK
+// =============================================================================
+
+var min_prod    = evi_mean.gt(EVI_MIN);
+var low_disturb = disturb_frac.lt(DISTURB_YR_THRESH);
+var eligible    = stable_mask.and(min_prod).and(low_disturb).selfMask();
+
+Map.addLayer(eligible.clip(SK), {palette: ['FF6600']}, 'Eligible pixels');
+
+print('Eligible pixel count:',
+  eligible.reduceRegion({
+    reducer: ee.Reducer.count(),
+    geometry: SK, scale: 5000, maxPixels: 1e8
+  })
+);
+
+// =============================================================================
+// 7. SAMPLE CANDIDATES AND SPATIAL THINNING
+// =============================================================================
+
+var candidates = eligible.sample({
+  region:     SK,
+  scale:      500,
+  numPixels:  10000,
+  geometries: true,
+  seed:       42
+});
+
+print('Candidate points:', candidates.size());
+
+var albers  = ee.Projection('EPSG:3347');
+
+var gridded = candidates.map(function(f) {
+  var pt     = f.geometry().transform(albers, 1);
+  var coords = pt.coordinates();
+  var cx     = ee.Number(coords.get(0)).divide(GRID_M).floor().multiply(GRID_M);
+  var cy     = ee.Number(coords.get(1)).divide(GRID_M).floor().multiply(GRID_M);
+  return f.set('grid_id', cx.format('%d').cat('_').cat(cy.format('%d')));
+});
+
+var grid_unique = gridded.distinct('grid_id');
+print('Unique 10 km grid cells:', grid_unique.size());
+
+// =============================================================================
+// 8. STRATIFIED SELECTION — 5×5 GEOGRAPHIC GRID
+// =============================================================================
+
+var stratified = grid_unique.map(function(f) {
+  var coords = f.geometry().coordinates();
+  var lon    = ee.Number(coords.get(0));
+  var lat    = ee.Number(coords.get(1));
+  var col    = lon.subtract(SK_LON_MIN).divide(LON_STEP).floor().min(4).max(0);
+  var row    = lat.subtract(SK_LAT_MIN).divide(LAT_STEP).floor().min(4).max(0);
+  return f.set('stratum_id', row.multiply(5).add(col).toInt());
+});
+
+var strata_ids = ee.List.sequence(0, N_STRATA - 1);
+
+var pass1 = ee.FeatureCollection(
+  strata_ids.map(function(s) {
+    return stratified
+      .filter(ee.Filter.eq('stratum_id', s))
+      .randomColumn('rand', ee.Number(s).add(42))
+      .sort('rand')
+      .limit(PER_STRATUM);
+  })
+).flatten();
+
+var n_needed  = ee.Number(N_SITES).subtract(pass1.size());
+var already   = pass1.aggregate_array('grid_id');
+var remaining = stratified
+  .filter(ee.Filter.inList('grid_id', already).not())
+  .randomColumn('rand2', 99)
+  .sort('rand2')
+  .limit(n_needed);
+
+var selected = pass1.merge(remaining).map(function(f) {
+  var coords   = f.geometry().coordinates();
+  var rand_val = ee.Algorithms.If(
+    f.propertyNames().contains('rand'), f.get('rand'), f.get('rand2')
+  );
+  return f.set({
+    'x':       coords.get(0),
+    'y':       coords.get(1),
+    'site_id': ee.String('PASTURE_')
+                 .cat(ee.Number(rand_val).multiply(1e8).toInt().format())
+  });
+});
+
+print('Selected sites total:', selected.size());
+print('Sites per stratum:', selected.aggregate_histogram('stratum_id'));
+
+Map.addLayer(selected, {color: 'red'}, 'Selected sites (n=' + N_SITES + ')');
+Map.centerObject(SK, 5);
+
+// =============================================================================
+// 9. EXPORT — SITE LOCATIONS
+// =============================================================================
+
+Export.table.toDrive({
+  collection:     selected,
+  description:    'SK_pasture_sites_selected',
+  folder:         EXPORT_FOLDER,
+  fileNamePrefix: 'SK_pasture_sites_selected',
+  fileFormat:     'CSV',
+  selectors:      ['site_id', 'x', 'y']
+});
+
+// =============================================================================
+// 10. EXPORT — ANNUAL 16-DAY BIOMASS TIME SERIES (2000-END_YEAR)
+// =============================================================================
+
+var years = [];
+for (var y = 2000; y <= END_YEAR; y++) { years.push(y); }
+
+years.forEach(function(yr) {
+
+  var aafc_mask  = get_aafc_mask(yr);
+  var yr_imgs    = modis_full.filter(ee.Filter.calendarRange(yr, yr, 'year'));
+
+  var yr_extracted = yr_imgs.map(function(img) {
+    var date       = img.date().format('YYYY-MM-dd');
+    var doy        = img.date().getRelative('day', 'year').add(1);
+    var img_masked = img.updateMask(aafc_mask);
+    var vals = img_masked.sampleRegions({
+      collection: selected,
+      scale:      500,
+      projection: 'EPSG:4326',
+      tileScale:  4,
+      geometries: true
+    });
+    return vals.map(function(f) {
+      return f.set({'date': date, 'doy': doy, 'year': yr});
+    });
+  }).flatten();
+
+  Export.table.toDrive({
+    collection:     yr_extracted,
+    description:    'SK_pasture_biomass_' + yr,
+    folder:         EXPORT_FOLDER,
+    fileNamePrefix: 'SK_pasture_biomass_' + yr,
+    fileFormat:     'CSV',
+    selectors:      ['site_id', 'x', 'y', 'date', 'doy', 'year', 'evi', 'abg_c']
+  });
+});
+
+print('Export tasks created: ' + (END_YEAR - 2000 + 2));
+print('Run all tasks in the Tasks tab');

@@ -5,7 +5,7 @@
 0.000001   / dmpflux           - in h2oflux routine (0.000001 = original value)
 10         / hours_rain        - duration of each rain event
 0          / drainlag          - # of days between rainfall event and drainage of soil (-1=computed)
--1500       / hpotdeep          - hydraulic water potential of deep storage layer (units?)
+-10000       / hpotdeep          - hydraulic water potential of deep storage layer (units?)
 0.003     / ksatdeep          - saturated hydraulic conductivity of deep storage layer (cm/sec)
 0.0 0.0   / tbotmn tbotmx      - min and max temperature for bottom soil layer (degrees C)
 0.003      / dmp               - damping factor for calculating soil temperature by layer

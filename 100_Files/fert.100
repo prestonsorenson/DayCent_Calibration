@@ -1,0 +1,26 @@
+N10U       # FERT DESC >> Saskatchewan max reasonable rate: 120 lb/ac N + 40 lb/ac P2O5 + ~32 lb/ac K2O \Urea + urease inhibitor
+13.5	   FERAMT(1)
+2.0	   FERAMT(2)
+3.0	   FERAMT(3)
+2	   AUFERT
+3          FERTTYP
+1          FERTAREAF
+0          FERTDEPTH
+23         REFT_CRNF
+61.13      T_EIGHTY
+17.17      CRFLAMDA
+6.29       CRF_QTEN
+0.2        NINHIB
+40         NINHTM
+0.0001     FINHIB(1)
+0.044      FINHIB(2)
+-2.43      FINHIB(3)
+43         UREAKM
+660.0      UREAKUI
+15.15      UREAST(1)
+0.8666     UREAST(2)
+0.0       FRAC_NH4
+0.0       FRAC_NO3
+
+
+

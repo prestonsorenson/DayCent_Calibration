@@ -51,7 +51,7 @@
 7.3000000        DEC3(2)	     # Max active soil OM decomp rate, frac turn-over/yr
 0.0049460      DEC4	         # Max slow soil OM decomp rate
 0.1000000          DEC5(1)	     # Max intermed. surf OM decomp rate
-0.2020000       DEC5(2)	     # Max intermed. soil OM decomp rate
+0.1965401       DEC5(2)	     # Max intermed. soil OM decomp rate
 5.0           DECK5
 -4.0          DLIGDF
 0.999         DRESP
@@ -87,10 +87,10 @@
 0.0300        OMLECH(1)
 0.1200        OMLECH(2)
 1.9000        OMLECH(3)
-0.7370000        P1CO2A(1)
+0.8004265        P1CO2A(1)
 0.1700000        P1CO2A(2)
 0.0000000        P1CO2B(1)
-0.7420000        P1CO2B(2)
+0.7284970        P1CO2B(2)
 0.5500000        P2CO2(1)
 0.5678900       P2CO2(2)       
 0.5500000        P3CO2
@@ -104,7 +104,7 @@
 3.0000        PLIGST(1)
 3.0000        PLIGST(2)
 0.5500000        PMCO2(1)
-0.5740000      PMCO2(2)       
+0.6481659      PMCO2(2)       
 0.0000        PMNSEC(1)
 0.0000        PMNSEC(2)
 2.0000        PMNSEC(3)
@@ -155,7 +155,7 @@
 2.0000        TEXEPP(5)
 1.0000        TEXESP(1)
 0.0040        TEXESP(3)
-7.1120000     TEFF(1)        
+8.2217031     TEFF(1)        
 0.1609460      TEFF(2)        
 30.0000000        WEFF(1)
 14.6867090     WEFF(2)        

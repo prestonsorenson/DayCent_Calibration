@@ -1124,7 +1124,7 @@ CAM    Uncalibrated_Camelina_Canola_Values_with_Adjusted_DDBASE_HIMAX_NOT_VALIDA
 120.0             CURGDYS
 0.5               CLSGRES
 0.12              CMXTURN
-0.2001              WSCOEF(1)
+0.100              WSCOEF(1)
 6.0110              WSCOEF(2)
 1.0               NPP2CS(1)
 2.0               CAFUE

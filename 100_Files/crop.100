@@ -909,7 +909,7 @@ SKGRASS   SK_MODIS_EVI_Trained
 28.4484             PPDF(2)
 0.8000               PPDF(3)
 3.5000               PPDF(4)
-1.0               BIOFLG
+0.0               BIOFLG
 200.0             BIOK5
 0.5000               PLTMRF
 100.0             FULCAN
@@ -1016,7 +1016,7 @@ SKGRASS   SK_MODIS_EVI_Trained
 1.0               NPP2CS(1)
 2.0               CAFUE
 0.7000              EMAX
-CAM    Uncalibrated_Camelina_Canola_Values_with_Adjusted_DDBASE_HIMAX_NOT_VALIDATED
+CAM    Uncalibrated_Camelina
 3.2630              PRDX(1)
 19.9978             PPDF(1)
 27.4992             PPDF(2)

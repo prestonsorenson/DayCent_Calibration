@@ -1011,8 +1011,8 @@ SKGRASS   SK_MODIS_EVI_Trained
 120.0             CURGDYS
 0.5               CLSGRES
 0.12              CMXTURN
-0.6000              WSCOEF(1)
-7.0001              WSCOEF(2)
+0.2000              WSCOEF(1)
+6.0001              WSCOEF(2)
 1.0               NPP2CS(1)
 2.0               CAFUE
 0.7000              EMAX

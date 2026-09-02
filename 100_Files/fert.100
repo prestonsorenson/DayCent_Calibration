@@ -19,7 +19,7 @@ N10U       # FERT DESC >> Saskatchewan max reasonable rate: 120 lb/ac N + 40 lb/
 660.0      UREAKUI
 15.15      UREAST(1)
 0.8666     UREAST(2)
-0.0       FRAC_NH4
+1.0       FRAC_NH4
 0.0       FRAC_NO3
 
 
